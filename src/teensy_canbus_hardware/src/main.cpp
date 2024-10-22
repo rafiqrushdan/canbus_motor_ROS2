@@ -2,128 +2,139 @@
 #include <math.h>
 #include <Arduino.h>
 
+#define CCW 0
+#define CW 1
+
 FlexCAN_T4<CAN1, RX_SIZE_256, TX_SIZE_16> can1;
 
-CAN_message_t msg;
+CAN_message_t msg_sent;
+CAN_message_t msg_receive;
 
 struct motor_values {
-  double radians = 0;
-  bool enabled = false;
-  int run_status = 0;
+  double angle;   //in radians
+  double rpm;     //get the angular speed of the motor
+  double accel;   //get the acccelaration of the motor
+  int id;
+  double dir;
+  uint8_t status;
 };
 
 motor_values motor1;
 
-// Function Prototypes
+//Define the function prototype
+void movetoposition();
+void setDir();
+void moverpm();
 void getEncoderVal();
-double returnEncoderRad(CAN_message_t receivedMsg);
-void goHome();
-void runToPosition(long encoder_counts, uint16_t speed, uint8_t acc);
-void setMotorEnable(bool status);
+void calibrate();
+
 
 void setup() {
   // Initialize CAN bus and serial communication
   can1.begin();
   can1.setBaudRate(250000);
   Serial.begin(115200);
-  getEncoderVal(); // Get the initial encoder value
+  getEncoderVal(0x01); // Get the initial encoder value
 }
 
 void loop() {
-  // Check if a CAN message is received
-  if (can1.read(msg)) {
-    Serial.print("CAN1 "); 
-    Serial.print("MB: "); Serial.print(msg.mb);
-    Serial.print("  ID: 0x"); Serial.print(msg.id, HEX);
-    Serial.print("  EXT: "); Serial.print(msg.flags.extended);
-    Serial.print("  LEN: "); Serial.print(msg.len);
-    Serial.print(" DATA: ");
-    for (uint8_t i = 0; i < msg.len; i++) {
-      Serial.print(msg.buf[i], HEX); Serial.print(" ");
-    }
-    Serial.print("  TS: "); Serial.println(msg.timestamp);
+getEncoderVal(0x01);
+delay(100);
 
-    // Process received CAN message
-    switch (msg.buf[0]) {
-      case 0x31:  // Encoder value
-        motor1.radians = returnEncoderRad(msg);
-        break;
-      case 0xF3:  // Motor enable/disable status
-        motor1.enabled = (msg.buf[1] == 0x01);
-        break;
-      case 0xF5:  // Motor run status
-        motor1.run_status = msg.buf[1]; // 0 = fail, 1 = starting, 2 = complete, 3 = end limit stop
-        break;
-    }
+  
+}
 
-    // delay(100); // Short delay to avoid message flooding
-    // getEncoderVal(); // Continuously request the encoder value
-      runToPosition(5000, 1500, 50); // Move to encoder position 5000, at speed 1500, with acceleration 50
-      delay(5000); // Wait for 5 seconds before the next action
+void getEncoderVal(u_int can_id)
+{ //use addition instead of carry mode
+
+  msg_sent.id=can_id;
+  msg_sent.len=2;
+  msg_sent.buf[0]=31;
+  msg_sent.buf[1]=32;
+
+  msg_receive.id=can_id;
+  msg_receive.len=8;
+  msg_receive.buf[0]=31;
+  msg_receive.buf[7]=255;
+
+  double value;
+
+      value |= ((uint64_t)msg.buf[1]) << 40; // Byte 2
+      value |= ((uint64_t)msg.buf[2]) << 32; // Byte 3
+      value |= ((uint64_t)msg.buf[3]) << 24; // Byte 4
+      value |= ((uint64_t)msg.buf[4]) << 16; // Byte 5
+      value |= ((uint64_t)msg.buf[5]) << 8;  // Byte 6
+      value |= ((uint64_t)msg.buf[6]);       // Byte 7
+
     
+
+  motor1.angle=value/1024*PI;
+
+  Serial.print("Angle:"); Serial.println(motor1.angle);
+}
+
+void calibrate()
+{
+  //Input to the motor
+  msg_sent.id=motor1.id;
+  msg_sent.len=3;
+  msg_sent.buf[0]=80;
+  msg_sent.buf[1]=0;
+  msg_sent.buf[2]=16;      //CRC
+
+
+  //Output from the motor
+  msg_receive.id=motor1.id;
+  msg_receive.len=3;
+  msg_receive.buf[0]=80;
+  uint8_t status= msg_receive.buf[1];
+  msg_receive.buf[2]=16;
+  
+  switch(status)
+  {
+    case 0:
+      Serial.println(" Calibrating….");
+        break;
+    case 1:
+      Serial.println ("Calibrated success.");
+        break;
+    case 2:
+       Serial.println("Calibrating fail");
+       break;
   }
+
+  can1.write(msg_sent);
+  can1.read(msg_receive);
 }
 
-void goHome() {
-  CAN_message_t msgSend;
-  msgSend.len = 2;
-  msgSend.id = 0x01;
-  msgSend.buf[0] = 0x91; // Go home command
-  msgSend.buf[1] = 0x92; // CRC
+void moverpm(uint8_t id,uint dir,u_int16_t speed,uint accel )
+{
+  bool status;
 
-  can1.write(msgSend);
-}
+  //Input to the motor
+  msg_sent.id=id;
+  msg_sent.len=5;
+  msg_sent.buf[0]=0xF6;
+  msg_sent.buf[1]=(dir << 7) | (speed>> 8);
+  msg_sent.buf[2]=speed & 0xFF;
+  msg_sent.buf[3]=accel;
+  msg_sent.buf[4]=155;
 
-void runToPosition(long encoder_counts, uint16_t speed, uint8_t acc) { 
-  CAN_message_t msgSend;
-  speed = constrain(speed, 0, 3000);
-  msgSend.len = 8;
-  msgSend.id = 0x01;
-  msgSend.buf[0] = 0xF5; // Run motor to absolute position mode
-  msgSend.buf[1] = speed >> 8;
-  msgSend.buf[2] = speed & 0xFF;
-  msgSend.buf[3] = acc; // Acceleration
-  msgSend.buf[4] = encoder_counts >> 16;
-  msgSend.buf[5] = encoder_counts >> 8;
-  msgSend.buf[6] = encoder_counts & 0xFF;
+  //Output of the motor (only get the status)
+  msg_receive.id=motor1.id;
+  msg_receive.len=3;
+  msg_receive.buf[0]=0xF6;
+  msg_receive.buf[1]=status;
+  msg_receive.buf[2]=255;
 
-  // CRC calculation
-  uint8_t crc = msgSend.id;
-  for (int i = 0; i < 7; i++) {
-    crc += msgSend.buf[i];
+  switch (status)
+  {
+  case 1:
+    Serial.println("Run success");
+    break;
+
+  case 0:
+    Serial.println("Run Failed");
+    break;
   }
-  msgSend.buf[7] = crc;
-
-  can1.write(msgSend);
-}
-
-void getEncoderVal() {
-  CAN_message_t msgSend;
-  msgSend.len = 2;
-  msgSend.id = 0x01;
-  msgSend.buf[0] = 0x31; // Request encoder value
-  msgSend.buf[1] = 0x32; // Checksum
-
-  can1.write(msgSend);
-}
-
-void setMotorEnable(bool status) {
-  CAN_message_t msgSend;
-  msgSend.len = 3;
-  msgSend.id = 0x01;
-  msgSend.buf[0] = 0xF3; // Enable/Disable motor
-  msgSend.buf[1] = status ? 0x01 : 0x00;
-  msgSend.buf[2] = status ? 0xF5 : 0xF4; // CRC
-
-  can1.write(msgSend);
-}
-
-double returnEncoderRad(CAN_message_t receivedMsg) {
-  uint32_t encoderVal = receivedMsg.buf[2]; // Start assembling the 32-bit value
-  encoderVal = (encoderVal << 8) | receivedMsg.buf[3];
-  encoderVal = (encoderVal << 8) | receivedMsg.buf[4];
-  encoderVal = (encoderVal << 8) | receivedMsg.buf[5];
-
-  // Convert encoder value to radians (assuming 8192 ticks per revolution)
-  return (double(encoderVal) / 8192.0) * 2 * PI;
 }
