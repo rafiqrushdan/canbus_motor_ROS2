@@ -25,7 +25,7 @@ motor_values motor1;
 void movetoposition();
 void setDir();
 void moverpm();
-void getEncoderVal();
+double getEncoderVal();
 void calibrate();
 
 
@@ -38,15 +38,18 @@ void setup() {
 }
 
 void loop() {
-getEncoderVal(0x01);
+
+motor1.angle= getEncoderVal(0x01);
+Serial.print("Angle:"); Serial.println(motor1.angle);
+
+// calibrate(0x01);
 delay(100);
 
-  
 }
 
-void getEncoderVal(u_int can_id)
+double getEncoderVal(u_int can_id)
 { //use addition instead of carry mode
-
+double angle;
   msg_sent.id=can_id;
   msg_sent.len=2;
   msg_sent.buf[0]=31;
@@ -68,15 +71,15 @@ void getEncoderVal(u_int can_id)
 
     
 
-  motor1.angle=value/1024*PI;
+  angle=value/1024*PI;
 
-  Serial.print("Angle:"); Serial.println(motor1.angle);
+  return angle;
 }
 
-void calibrate()
+void calibrate(u_int can_id)
 {
   //Input to the motor
-  msg_sent.id=motor1.id;
+  msg_sent.id=can_id;
   msg_sent.len=3;
   msg_sent.buf[0]=80;
   msg_sent.buf[1]=0;
@@ -84,7 +87,7 @@ void calibrate()
 
 
   //Output from the motor
-  msg_receive.id=motor1.id;
+  msg_receive.id=can_id;
   msg_receive.len=3;
   msg_receive.buf[0]=80;
   uint8_t status= msg_receive.buf[1];
@@ -121,7 +124,7 @@ void moverpm(uint8_t id,uint dir,u_int16_t speed,uint accel )
   msg_sent.buf[4]=155;
 
   //Output of the motor (only get the status)
-  msg_receive.id=motor1.id;
+  msg_receive.id=id;
   msg_receive.len=3;
   msg_receive.buf[0]=0xF6;
   msg_receive.buf[1]=status;
