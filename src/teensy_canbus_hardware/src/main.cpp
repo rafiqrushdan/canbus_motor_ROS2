@@ -18,17 +18,22 @@ struct motor_values {
   double dir;
   uint8_t status;
   double rev;    //revolution of the motor for position control
+  int pulse;
 };
 
 motor_values motor1;
 
-// Define the function prototype
+// Function prototypes
 void movetoposition(uint8_t can_id, uint8_t dir, uint8_t rev, uint16_t speed, uint8_t acc, uint32_t pulses);
 void setDir();
 void moverpm(uint8_t id, uint8_t dir, uint16_t speed, uint8_t accel);
 double getEncoderVal(uint8_t can_id);
 void calibrate(uint8_t can_id);
-double returnEncoderRad(CAN_message_t recievedMsg); // Prototype for the new function
+double returnEncoderRad(CAN_message_t recievedMsg); 
+double getEncoderRpm(uint8_t can_id);
+double returnEncoderRpm(CAN_message_t recievedMsg);
+int getEncoderPulse(uint8_t can_id);
+int returnEncoderPulse(CAN_message_t recievedMsg); 
 
 void setup() {
   // Initialize CAN bus and serial communication
@@ -39,55 +44,86 @@ void setup() {
 }
 
 void loop() {
+
+//Give command to move the motor  //Code didnt work
+  // moverpm(0x01,CW,1600,200);
+  // movetoposition(0x01,CCW,2,200,5,50);   
+
+
+  //Reading from motor
   motor1.angle = getEncoderVal(0x01); // Update the angle
-  Serial.print("Angle: ");
+  Serial.print("Angle (radians): ");
   Serial.println(motor1.angle);
 
-  // Example functions you mentioned
-  // calibrate(0x01);   // This works
-  // movetoposition(0x01, 1, 2, 1023, 50, 5000); // Uncomment for testing
-  // moverpm(0x01, CCW, 1023, 50);  // Uncomment for testing
+  motor1.rpm = getEncoderRpm(0x01);
+  Serial.print("Motor speed (RPM): ");
+  Serial.println(motor1.rpm);
+
+  motor1.pulse = getEncoderPulse(0x01);
+  Serial.print("No Pulse : ");
+  Serial.println(motor1.pulse);
+
+  calibrate(0x01);
+
   delay(100);
 }
 
 // Function that reads encoder value from CAN and converts it to radians
 double getEncoderVal(uint8_t can_id) {
-  double angle;
-
   // Send request to get the encoder value
   msg_sent.id = can_id;
   msg_sent.len = 2;
   msg_sent.buf[0] = 0x31;
-  msg_sent.buf[1] = 0x32; // Fixed buffer access
+  msg_sent.buf[1] = 0x32; // Command to request encoder position
   can1.write(msg_sent);
 
   // Read the response from the motor
   if (can1.read(msg_receive)) {
-    // Check if response is valid before accessing buffer
-    
-    // Call returnEncoderRad to process the message and return the angle in radians
-    return returnEncoderRad(msg_receive);
+    return returnEncoderRad(msg_receive); // Process the message and return the angle in radians
   }
   return -1; // Error case if no data is received
 }
 
 double returnEncoderRad(CAN_message_t recievedMsg) {
   // Extract encoder value from CAN message
-  int32_t encoderVal = recievedMsg.buf[2];  // Starting from byte 2 (assumed to be the first byte of encoder data)
+  int32_t encoderVal = recievedMsg.buf[2];  // Starting from byte 2
   encoderVal = (encoderVal << 8) | recievedMsg.buf[3];
   encoderVal = (encoderVal << 8) | recievedMsg.buf[4];
   encoderVal = (encoderVal << 8) | recievedMsg.buf[5];
   encoderVal = (encoderVal << 8) | recievedMsg.buf[6];
 
-  // Since it's a 32-bit value, we need to sign-extend it (assuming encoder uses 24 bits for signed data)
+  // Sign extension for 24-bit encoder value
   if (encoderVal & 0x800000) { // Check if the sign bit (bit 23) is set
-    encoderVal |= 0xFF000000;  // Sign extend the value to preserve the negative value
+    encoderVal |= 0xFF000000;  // Sign extend the value
   }
 
   // Convert encoder value to radians (adjust the conversion factor if needed)
-  return ((encoderVal / double(0x2000)) * PI/2); // Assuming 0x2000 corresponds to half a rotation
+  return ((encoderVal / double(0x2000)) * PI / 2); // Assuming 0x2000 corresponds to half a rotation
 }
 
+// Function that reads RPM from CAN
+double getEncoderRpm(uint8_t can_id) {
+  // Send request to get the RPM value
+  msg_sent.id = can_id;
+  msg_sent.len = 2;
+  msg_sent.buf[0] = 0x32;
+  msg_sent.buf[1] = 0x33; // Command to request RPM
+  can1.write(msg_sent);
+
+  // Read the response from the motor
+  if (can1.read(msg_receive)) {
+    return returnEncoderRpm(msg_receive); // Process the message and return RPM
+  }
+  return -1; // Error case if no data is received
+}
+
+double returnEncoderRpm(CAN_message_t recievedMsg) {
+  // Extract encoder RPM from CAN message
+  int16_t encoderspeed = recievedMsg.buf[2];  // Starting from byte 2
+  encoderspeed = (encoderspeed << 8) | recievedMsg.buf[3];
+
+  return encoderspeed; // Return the RPM value (positive or negative)
+}
 
 // Calibrate the motor
 void calibrate(uint8_t can_id) {
@@ -156,19 +192,16 @@ void movetoposition(uint8_t can_id, uint8_t dir, uint8_t rev, uint16_t speed, ui
   msg_sent.buf[0] = 0xFD;     // Command code (FD)
   
   // byte 2: direction and revolutions (dir in b7, rev in b6-b4)
-  msg_sent.buf[1] = (dir << 7) | ((rev & 0x07) << 4);
+  msg_sent.buf[1] = (dir << 7) | (rev << 6) | (speed << 3);
   
   // byte 3: speed (bits b7-b0)
-  msg_sent.buf[2] = (speed >> 8) & 0xFF;  // Speed high byte
-  msg_sent.buf[3] = speed & 0xFF;         // Speed low byte
-  
-  // byte 4: acceleration (bits b7-b0)
-  msg_sent.buf[4] = acc;
-  
+  speed = (speed<< 8)|msg_sent.buf[2];
+  msg_sent.buf[3] = acc;         
+
   // bytes 5-7: pulses (23 bits -> 3 bytes)
-  msg_sent.buf[5] = (pulses >> 16) & 0xFF;  // Pulses high byte
-  msg_sent.buf[6] = (pulses >> 8) & 0xFF;   // Pulses mid byte
-  msg_sent.buf[7] = pulses & 0xFF;          // Pulses low byte
+  pulses = (pulses << 8) | msg_sent.buf[4] ; 
+  pulses = (pulses << 8) | msg_sent.buf[4] ;  
+  pulses = (pulses <<8)  | msg_sent.buf[4] ;      
   
   // Send CAN message
   can1.write(msg_sent);
@@ -189,7 +222,37 @@ void movetoposition(uint8_t can_id, uint8_t dir, uint8_t rev, uint16_t speed, ui
         break;
       case 3:
         Serial.println("End Limit Stopped");
-        break; // Add missing break statement
+        break;
     }
   }
+}
+
+
+int getEncoderPulse(uint8_t can_id)
+{
+  // Send request to get the encoder pulse
+  msg_sent.id = can_id;
+  msg_sent.len = 2;
+  msg_sent.buf[0] = 0x33;
+  msg_sent.buf[1] = 0x34; // Command to request encoder position
+  can1.write(msg_sent);
+
+    if (can1.read(msg_receive)) {
+    return returnEncoderPulse(msg_receive); // Process the message and return the angle in radians
+  }
+  return -1; // Error case if no data is received
+}
+
+
+int returnEncoderPulse(CAN_message_t recievedMsg)
+{
+  // Extract encoder RPM from CAN message
+  int32_t encoderpulse = recievedMsg.buf[1];  // Starting from byte 2
+  encoderpulse = (encoderpulse << 8) | recievedMsg.buf[2];
+  encoderpulse = (encoderpulse << 8) | recievedMsg.buf[3];
+  encoderpulse = (encoderpulse << 8) | recievedMsg.buf[4];
+
+  
+  return encoderpulse; // Return the RPM value (positive or negative)
+
 }
