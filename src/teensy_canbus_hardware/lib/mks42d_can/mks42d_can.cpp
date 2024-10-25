@@ -117,6 +117,7 @@ void moverpm(uint8_t id, uint8_t dir, uint16_t speed, uint8_t accel) {
   }
 }
 
+//this code used position mode 1 
 void movetoposition(uint8_t can_id, uint8_t dir, uint8_t rev, uint16_t speed, uint8_t acc, uint32_t pulses) {
   uint8_t status;
 
