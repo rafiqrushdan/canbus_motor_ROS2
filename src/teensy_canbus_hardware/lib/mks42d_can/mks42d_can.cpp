@@ -108,6 +108,37 @@ void moverpm(uint8_t id, uint8_t dir,u_int16_t rev, uint16_t speed, uint8_t acce
 
     switch (status) {
       case 1:
+        Serial.println("Stop motor success");
+        break;
+      case 0:
+        Serial.println("Stop motor failed");
+        break;
+      case 2:
+        Serial.println("Stop motor success");
+        break;
+    }
+  }
+}
+
+void moverpm(uint8_t id, uint8_t dir,u_int16_t rev, uint16_t speed, uint8_t accel) {
+  uint8_t status;
+
+  // Input to the motor
+  msg_sent.id = id;
+  msg_sent.len = 8;
+  msg_sent.buf[0] = 0xF6;
+  msg_sent.buf[1] = (dir << 8) | (rev << 7)|(speed << 5);
+  msg_sent.buf[2] = speed ;
+  msg_sent.buf[3] = accel;
+  msg_sent.buf[4] = 0x55; // Demo CRC or checksum
+  can1.write(msg_sent);
+
+  // Output from the motor (only get the status)
+  if (can1.read(msg_receive)) {
+    status = msg_receive.buf[1];
+
+    switch (status) {
+      case 1:
         Serial.println("Run success");
         break;
       case 0:
